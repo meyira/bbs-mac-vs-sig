@@ -8,18 +8,83 @@ use bls12_381::Scalar;
 use ff::Field; // For .invert() and .is_zero()
 use group::Group; // For G1Projective ops (+, *, .generator())
 use rand::RngCore;
+use std::collections::HashSet;
+use std::marker::PhantomData;
+
+use curve25519_dalek::{
+    RistrettoPoint, Scalar as RistrettoScalar, ristretto::RistrettoBasepointTable,
+};
+
+/*
+use std::marker::PhantomData;
+
+trait Group {}
+
+struct Ristretto255;
+
+impl Group for Ristretto255 {}
+
+struct Bls12_381;
+
+impl Group for Bls12_381 {}
+
+struct Bbs<G> {
+    phantom: PhantomData<G>,
+}
+
+struct BbsSignature<G> {
+    phantom: PhantomData<G>,
+}
+
+impl<G: Group> Bbs<G> {
+    pub fn sign(&self, msg: &[&[u8]]) -> BbsSignature<G> {
+        todo!()
+    }
+}
+
+impl Bbs<Ristretto255> {
+    pub fn private_verify(&self, msg: &[&[u8]], sig: &BbsSignature<Ristretto255>) -> bool {
+        todo!()
+    }
+}
+
+impl Bbs<Bls12_381> {
+    pub fn public_verify(&self, msg: &[&[u8]], sig: &BbsSignature<Ristretto255>) -> bool {
+        todo!()
+    }
+}
+*/
+
+// Represents a BBS Proof
+pub struct BbsProof {
+    pub abar: G1Projective,
+    pub bbar: G1Projective,
+    pub d: G1Projective,
+    pub e_hat: Scalar,
+    pub r1_hat: Scalar,
+    pub r3_hat: Scalar,
+    pub commitments: Vec<Scalar>,
+    pub challenge: Scalar, // This is `cp` in the draft
+}
+
+////////// ----------------------------------------------------- ////////////////////
+////////// ----------------------------------------------------- ////////////////////
+////////// ----------------------------------------------------- ////////////////////
+////////// ----------------------------------------------------- ////////////////////
+////////// ----------------------------------------------------- ////////////////////
 
 /// System parameters that define the cryptographic setup for the BBS scheme
 ///
 /// The generators are going to be used throughout the protocol. The number of
 /// generators depends on the number of messages the BBS scheme is supposed to sign.
 #[derive(Clone, Debug)]
-pub struct BbsParams<G: Group> {
+pub struct BbsSignatureParams<G: Group> {
     h_generators: Vec<G>,
     g_generator: G,
+    public_key: G,
 }
 
-impl BbsParams<G1Projective> {
+impl BbsSignatureParams<RistrettoPoint> {
     /// Generates parameters for the BBS scheme based on the `num_attributes` parameter:
     ///
     /// # Arguments
@@ -27,14 +92,66 @@ impl BbsParams<G1Projective> {
     /// - `rng`: a random number generator
     ///
     /// # Returns
-    /// - `BbsParams`: the system parameters
+    /// - `BbsSignatureParams`: the system parameters
     ///
     /// # Example
     /// ```rust
-    /// use bbs_mac_vs_sig::BbsParams;
+    /// use bbs_mac_vs_sig::BbsSignatureParams;
+    /// use curve25519_dalek::RistrettoPoint;
     /// let mut rng = rand::thread_rng();
     /// let num_attributes = 5;
-    /// let params = BbsParams::new(num_attributes, &mut rng);
+    /// let params = BbsSignatureParams::<RistrettoPoint>::new(num_attributes, &mut rng);
+    /// ```
+    pub fn new(num_attributes: usize, rng: &mut (impl RngCore + rand::CryptoRng)) -> Self {
+        let g_generator = RistrettoPoint::generator();
+        let mut h_generators = Vec::with_capacity(num_attributes);
+        for _ in 0..num_attributes {
+            h_generators.push(g_generator * RistrettoScalar::random(rng));
+        }
+        Self {
+            h_generators,
+            g_generator,
+            public_key: RistrettoPoint::generator(), // todo remove or figure out how to make optional, this is purely for private verifiaction
+        }
+    }
+}
+
+/// A BBS MAC (Message Authentication Code) with the following components:
+/// - `a`: the MAC value `A = (x + e)^-1 * (G + m1*H1 + ... + ml*Hl)` for `l` messages
+/// - `e`: the random scalar used for the MAC
+#[derive(Debug)]
+pub struct BbsSignature {
+    a: G1Projective,
+    e: Scalar,
+}
+
+#[derive(Debug)]
+pub enum BbsSignatureError {
+    /// thrown when the number of messages does not match the number of generators
+    InputLengthMismatch,
+    /// thrown when the inverse of (x + e) cannot be computed (e.g. when x + e = 0)
+    VerificationInverseFailed,
+    /// thrown when the verification fails (e.g. when the given
+    /// `A` != `(x + e)^-1 * (G + m1*H1 + ... + ml*Hl)`)
+    VerificationFailed,
+}
+
+impl BbsSignatureParams<G1Projective> {
+    /// Generates parameters for the BBS scheme based on the `num_attributes` parameter:
+    ///
+    /// # Arguments
+    /// - `num_attributes`: the number of attributes to be signed
+    /// - `rng`: a random number generator
+    ///
+    /// # Returns
+    /// - `BbsSignatureParams`: the system parameters
+    ///
+    /// # Example
+    /// ```rust
+    /// use bbs_mac_vs_sig::BbsSignatureParams;
+    /// let mut rng = rand::thread_rng();
+    /// let num_attributes = 5;
+    /// let params = BbsSignatureParams::new(num_attributes, &mut rng);
     /// ```
     pub fn new(num_attributes: usize, rng: &mut impl RngCore) -> Self {
         let g_generator = G1Projective::generator();
@@ -45,31 +162,12 @@ impl BbsParams<G1Projective> {
         Self {
             h_generators,
             g_generator,
+            public_key: g_generator, // todo figure out how to make this optional or include public key
         }
     }
 }
 
-/// A BBS MAC (Message Authentication Code) with the following components:
-/// - `a`: the MAC value `A = (x + e)^-1 * (G + m1*H1 + ... + ml*Hl)` for `l` messages
-/// - `e`: the random scalar used for the MAC
-#[derive(Debug)]
-pub struct BbsMac {
-    a: G1Projective,
-    e: Scalar,
-}
-
-#[derive(Debug)]
-pub enum BbsMacError {
-    /// thrown when the number of messages does not match the number of generators
-    InputLengthMismatch,
-    /// thrown when the inverse of (x + e) cannot be computed (e.g. when x + e = 0)
-    VerificationInverseFailed,
-    /// thrown when the verification fails (e.g. when the given
-    /// `A` != `(x + e)^-1 * (G + m1*H1 + ... + ml*Hl)`)
-    VerificationFailed,
-}
-
-impl BbsMac {
+impl BbsSignature {
     /// Implements the core BBS signing computation:
     /// A = (x + e)^-1 * (G + m1*H1 + ... + ml*Hl)
     ///
@@ -80,36 +178,36 @@ impl BbsMac {
     /// - `rng`: a random number generator
     ///
     /// # Returns
-    /// - `Ok(BbsMac)`: the computed BBS MAC
-    /// - `Err(BbsMacError::InputLengthMismatch)`: an error if the number of messages
+    /// - `Ok(BbsSignature)`: the computed BBS MAC
+    /// - `Err(BbsSignatureError::InputLengthMismatch)`: an error if the number of messages
     ///   does not match the number of generators
     ///
     /// # Example
     /// ```rust
-    /// use bbs_mac_vs_sig::{BbsParams, BbsMac};
+    /// use bbs_mac_vs_sig::{BbsSignatureParams, BbsSignature};
     /// use bls12_381::Scalar;
     /// use ff::Field;
     ///
     /// let mut rng = rand::thread_rng();
     /// let num_messages = 5;
-    /// let params = BbsParams::new(num_messages, &mut rng);
+    /// let params = BbsSignatureParams::new(num_messages, &mut rng);
     /// let x = Scalar::random(&mut rng);
     /// let mut messages = Vec::with_capacity(num_messages);
     /// for _ in 0..num_messages {
     ///     messages.push(Scalar::random(&mut rng));
     /// }
     ///
-    /// let mac = BbsMac::sign(&x, &messages, &params, &mut rng).unwrap();
-    /// BbsMac::verify(&x, &messages, &mac, &params).unwrap();
+    /// let mac = BbsSignature::sign(&x, &messages, &params, &mut rng).unwrap();
+    /// BbsSignature::verify(&x, &messages, &mac, &params).unwrap();
     /// ```
     pub fn sign(
         x: &Scalar,
         messages: &[Scalar],
-        bbs_params: &BbsParams<G1Projective>,
+        bbs_params: &BbsSignatureParams<G1Projective>,
         rng: &mut impl RngCore,
-    ) -> Result<BbsMac, BbsMacError> {
+    ) -> Result<BbsSignature, BbsSignatureError> {
         if messages.len() != bbs_params.h_generators.len() {
-            return Err(BbsMacError::InputLengthMismatch);
+            return Err(BbsSignatureError::InputLengthMismatch);
         }
 
         // generate random e for the MAC
@@ -158,19 +256,19 @@ impl BbsMac {
     ///
     /// # Returns
     /// - `Ok(())`: the MAC is valid
-    /// - `Err(BbsMacError::VerificationInverseFailed)`: could not invert (x + e)
-    /// - `Err(BbsMacError::InputLengthMismatch)`: number of messages does not match number of generators
-    /// - `Err(BbsMacError::VerificationFailed)`: computed value does not match the provided MAC
+    /// - `Err(BbsSignatureError::VerificationInverseFailed)`: could not invert (x + e)
+    /// - `Err(BbsSignatureError::InputLengthMismatch)`: number of messages does not match number of generators
+    /// - `Err(BbsSignatureError::VerificationFailed)`: computed value does not match the provided MAC
     ///
     /// # Example
     /// ```rust
-    /// use bbs_mac_vs_sig::{BbsParams, BbsMac};
+    /// use bbs_mac_vs_sig::{BbsSignatureParams, BbsSignature};
     /// use bls12_381::Scalar;
     /// use ff::Field;
     ///
     /// let mut rng = rand::thread_rng();
     /// let num_messages = 5;
-    /// let params = BbsParams::new(num_messages, &mut rng);
+    /// let params = BbsSignatureParams::new(num_messages, &mut rng);
     /// let x = Scalar::random(&mut rng);
     ///
     /// let mut messages = Vec::with_capacity(num_messages);
@@ -178,21 +276,21 @@ impl BbsMac {
     ///     messages.push(Scalar::random(&mut rng));
     /// }
     ///
-    /// let mac = BbsMac::sign(&x, &messages, &params, &mut rng).unwrap();
-    /// BbsMac::verify(&x, &messages, &mac, &params).unwrap();
+    /// let mac = BbsSignature::sign(&x, &messages, &params, &mut rng).unwrap();
+    /// BbsSignature::verify(&x, &messages, &mac, &params).unwrap();
     /// ```
     pub fn verify(
         x: &Scalar,
         messages: &[Scalar],
-        mac: &BbsMac,
-        bbs_params: &BbsParams<G1Projective>,
-    ) -> Result<(), BbsMacError> {
+        mac: &BbsSignature,
+        bbs_params: &BbsSignatureParams<G1Projective>,
+    ) -> Result<(), BbsSignatureError> {
+        if messages.len() != bbs_params.h_generators.len() {
+            return Err(BbsSignatureError::InputLengthMismatch);
+        }
         let inv = (x + mac.e).invert();
         if bool::from(inv.is_none()) {
-            return Err(BbsMacError::VerificationInverseFailed);
-        }
-        if messages.len() != bbs_params.h_generators.len() {
-            return Err(BbsMacError::InputLengthMismatch);
+            return Err(BbsSignatureError::VerificationInverseFailed);
         }
 
         let b: G1Projective = bbs_params.g_generator
@@ -206,8 +304,135 @@ impl BbsMac {
         if a_prime == mac.a {
             Ok(())
         } else {
-            Err(BbsMacError::VerificationFailed)
+            Err(BbsSignatureError::VerificationFailed)
         }
+    }
+}
+
+impl BbsProof {
+    pub fn show_partial(
+        pk: G1Projective,
+        signature: BbsSignature,
+        messages: &[Scalar],
+        bbs_params: &BbsSignatureParams<G1Projective>,
+        disclosed_indices: &[usize],
+    ) -> Result<BbsProof, BbsSignatureError> {
+        if messages.len() != bbs_params.h_generators.len() {
+            return Err(BbsSignatureError::InputLengthMismatch);
+        }
+
+        // 1) Validate bounds
+        if disclosed_indices.iter().any(|&i| i >= messages.len()) {
+            return Err(BbsSignatureError::VerificationFailed);
+        }
+
+        // TODO Optional: reject duplicates
+        // 9.  undisclosed_indexes = (0, 1, ..., L - 1) \ disclosed_indexes
+        let disclosed_set: HashSet<usize> = disclosed_indices.iter().copied().collect();
+        if disclosed_set.len() != disclosed_indices.len() {
+            return Err(BbsSignatureError::VerificationFailed);
+        }
+
+        // 2) Compute complement in ascending order
+        // let undisclosed_indices: Vec<usize> =
+        //     (0..l).filter(|i| !disclosed_set.contains(i)).collect();
+        // TODO do we need
+        // (messages[i1], ..., messages[iR])
+        // (messages[j1], ..., messages[jU])
+        //
+        //
+        //  let random_scalars = Vec<Scalar>::with_capacity(5 + undisclosed_indices.len());
+
+        //  // 2. B = P1  * domain + H_1 * msg_1 + ... + H_L * msg_L
+        //  let r1=Scalar::random(&mut rng);
+        //  let r2=Scalar::random(&mut rng);
+        //  let b = bbs_params.g_generator
+        //      + messages
+        //          .iter()
+        //          .zip(bbs_params.h_generators.iter())
+        //          .map(|(m, h)| (*h) * (*m))
+        //          .sum::<G1Projective>();
+        //      let d=b*r2;
+        //      let a_bar=signature.a*(r1*r2);
+        //      let b_bar=d*r1-a_bar*signature.e;
+        //      let t_1=a_bar*signature.e.invert().unwrap()+signature.a*r1.invert().unwrap();
+        //      let h_undisclosed: Vec<G1Projective> = Vec::with_capacity(undisclosed_indices.len());
+        //      for j in undisclosed_indices.iter() {
+        //          h_undisclosed.push(bbs_params.h_generators[*j]);
+        //      }
+        //      let t_2=d*r3.invert().unwrap();
+        //      for i in range(len(undisclosed_indices.len())){
+        //          t_2+=h_undisclosed[i]*messages[undisclosed_indices[i]];
+        //      }
+
+        // 8. return (Abar, Bbar, D, T1, T2, domain)
+
+        // compute  challenge
+
+        // Inputs:
+        // - init_res (REQUIRED), vector representing the value returned after
+        //                        initializing the proof generation or verification
+        //                        operations, consisting of 5 points of G1 and a
+        //                        scalar value, in that order.
+        // - disclosed_messages (OPTIONAL), vector of scalar values. If not
+        //                                  supplied, it defaults to the empty
+        //                                  array ("()").
+        // - disclosed_indexes (OPTIONAL), vector of non-negative integers in
+        //                                 ascending order. If not supplied, it
+        //                                 defaults to the empty array ("()").
+        // - ph (OPTIONAL), an octet string. If not supplied, it must default to
+        //                  the empty octet string ("").
+        // - api_id (OPTIONAL), an octet string. If not supplied it defaults to the
+        //                      empty octet string ("").
+        //
+        // Outputs:
+        //
+        // - challenge, a scalar.
+        //
+        // Definitions:
+        //
+        // 1. hash_to_scalar_dst, an octet string representing the domain
+        //                        separation tag: api_id || "H2S_" where "H2S_" is
+        //                        an ASCII string comprised of 4 bytes.
+        //
+        // Deserialization:
+        //
+        // Looker, et al.           Expires 8 January 2026                [Page 35]
+        // Internet-Draft          The BBS Signature Scheme               July 2025
+        //
+        // 1. R = length(disclosed_indexes)
+        // 2. (i1, ..., iR) = disclosed_indexes
+        // 3. if length(disclosed_messages) != R, return INVALID
+        // 3. (msg_i1, ..., msg_iR) = disclosed_messages
+        // 4. (Abar, Bbar, D, T1, T2, domain) = init_res
+        //
+        // ABORT if:
+        //
+        // 1. R > 2^64 - 1
+        // 2. length(ph) > 2^64 - 1
+        //
+        // Procedure:
+        //
+        // 1. c_arr = (R, i1, msg_i1, i2, msg_i2, ..., iR, msg_iR, Abar, Bbar,
+        //                                                       D, T1, T2, domain)
+        // 2. c_octs = serialize(c_arr) || I2OSP(length(ph), 8) || ph
+        // 3. return hash_to_scalar(c_octs, hash_to_scalar_dst)
+        //
+        // 4. challenge = ProofChallengeCalculate(init_res, disclosed_messages,
+        //                                                  disclosed_indexes,
+        //                                                  ph,
+        //                                                  api_id)
+        // 5. if challenge is INVALID, return INVALID
+        // 6. proof = ProofFinalize(init_res, challenge, e, random_scalars,
+        //                                                    undisclosed_messages)
+        // 7. return proof
+
+        unimplemented!()
+    }
+
+    // - result, either VALID or INVALID.
+    pub fn verify_partial() -> bool {
+        true
     }
 }
 
@@ -221,7 +446,7 @@ mod tests {
     fn sign_and_verify_succeeds() {
         let mut rng = rand::thread_rng();
         let num_messages = 5;
-        let params = BbsParams::new(num_messages, &mut rng);
+        let params = BbsSignatureParams::new(num_messages, &mut rng);
         let x = Scalar::random(&mut rng);
 
         let mut messages = Vec::with_capacity(num_messages);
@@ -229,8 +454,8 @@ mod tests {
             messages.push(Scalar::random(&mut rng));
         }
 
-        let mac = BbsMac::sign(&x, &messages, &params, &mut rng).unwrap();
-        BbsMac::verify(&x, &messages, &mac, &params).unwrap();
+        let mac = BbsSignature::sign(&x, &messages, &params, &mut rng).unwrap();
+        BbsSignature::verify(&x, &messages, &mac, &params).unwrap();
     }
 
     /// Fails verification when messages are tampered after signing.
@@ -238,7 +463,7 @@ mod tests {
     fn tampered_message_fails() {
         let mut rng = rand::thread_rng();
         let num_messages = 3;
-        let params = BbsParams::new(num_messages, &mut rng);
+        let params = BbsSignatureParams::new(num_messages, &mut rng);
         let x = Scalar::random(&mut rng);
 
         let mut messages = Vec::with_capacity(num_messages);
@@ -246,14 +471,14 @@ mod tests {
             messages.push(Scalar::random(&mut rng));
         }
 
-        let mac = BbsMac::sign(&x, &messages, &params, &mut rng).unwrap();
+        let mac = BbsSignature::sign(&x, &messages, &params, &mut rng).unwrap();
 
         // Tamper one message
         let mut tampered = messages.clone();
         tampered[0] += Scalar::one();
 
-        let res = BbsMac::verify(&x, &tampered, &mac, &params);
-        assert!(matches!(res, Err(BbsMacError::VerificationFailed)));
+        let res = BbsSignature::verify(&x, &tampered, &mac, &params);
+        assert!(matches!(res, Err(BbsSignatureError::VerificationFailed)));
     }
 
     /// Returns an error when the number of messages does not match the parameters.
@@ -261,7 +486,7 @@ mod tests {
     fn length_mismatch_errors() {
         let mut rng = rand::thread_rng();
         let num_messages = 4;
-        let params = BbsParams::new(num_messages, &mut rng);
+        let params = BbsSignatureParams::new(num_messages, &mut rng);
         let x = Scalar::random(&mut rng);
 
         // Use different number of messages than params expect
@@ -271,7 +496,7 @@ mod tests {
             messages.push(Scalar::random(&mut rng));
         }
 
-        let res = BbsMac::sign(&x, &messages, &params, &mut rng);
-        assert!(matches!(res, Err(BbsMacError::InputLengthMismatch)));
+        let res = BbsSignature::sign(&x, &messages, &params, &mut rng);
+        assert!(matches!(res, Err(BbsSignatureError::InputLengthMismatch)));
     }
 }
