@@ -116,10 +116,8 @@ impl BbsMac {
         // Compute the scalar inverse: (x + e)^-1.
         // We loop, re-sampling 'e' until (x + e) is non-zero and we get an inverse.
         let d_inv = loop {
-            let d: Scalar = *x + e; // d = x + e
-            // Attempt to compute the inverse.
-            // ff::Field::invert returns subtle::CtOption<Self>.
-            match d.invert() {
+            let d = *x + e;
+            match Option::<Scalar>::from(d.invert()) {
                 Some(inv) => break inv,
                 None => {
                     // (x + e) was zero. Sample a new 'e' and the loop will retry.
@@ -185,10 +183,9 @@ impl BbsMac {
         if attributes.len() != bbs_params.h_generators.len() {
             return Err(BbsMacError::InputLengthMismatch);
         }
-
-        let Some(inv) = (x + mac.e).invert() else {
-            return Err(BbsMacError::VerificationFailed);
-        };
+        let d = *x + mac.e;
+        let d_inv: Scalar =
+            Option::<Scalar>::from(d.invert()).ok_or(BbsMacError::VerificationFailed)?;
 
         let b: G1Projective = bbs_params.g_generator
             + attributes
@@ -197,7 +194,7 @@ impl BbsMac {
                 .map(|(m, h)| (*h) * (*m))
                 .sum::<G1Projective>();
 
-        let a_prime: G1Projective = b * inv.unwrap();
+        let a_prime: G1Projective = b * d_inv;
         if a_prime == mac.a {
             Ok(())
         } else {
