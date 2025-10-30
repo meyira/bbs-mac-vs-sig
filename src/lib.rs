@@ -38,10 +38,7 @@ impl BbsParams<G1Projective> {
     /// ```
     pub fn new(num_attributes: usize, rng: &mut impl RngCore) -> Self {
         let g_generator = G1Projective::generator();
-        let mut h_generators = Vec::with_capacity(num_attributes);
-        for _ in 0..num_attributes {
-            h_generators.push(G1Projective::random(&mut *rng));
-        }
+        let h_generators = std::iter::repeat_with(|| G1Projective::random(&mut *rng)).take(num_attributes).collect();
         Self {
             h_generators,
             g_generator,
