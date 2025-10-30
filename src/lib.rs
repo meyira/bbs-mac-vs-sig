@@ -86,11 +86,10 @@ pub enum BbsSignatureError {
 pub struct BbsSignatureParams<G: Group> {
     h_generators: Vec<G>,
     g_generator: G,
-    public_key: G,
 }
 
-impl BbsSignatureParams<RistrettoPoint> {
-    /// Generates parameters for the BBS scheme based on the `num_attributes` parameter:
+impl<G: Group> BbsSignatureParams<G> {
+    /// Generates deterministic parameters for the BBS scheme based on the `num_attributes` parameter:
     ///
     /// # Arguments
     /// - `num_attributes`: the number of attributes to be signed
@@ -109,47 +108,16 @@ impl BbsSignatureParams<RistrettoPoint> {
     /// let params = BbsSignatureParams::<RistrettoPoint>::new(num_attributes, &mut rng);
     /// ```
     pub fn new(num_attributes: usize, rng: &mut (impl RngCore + rand::CryptoRng)) -> Self {
-        let g_generator = RistrettoPoint::generator();
+        let g_generator = G::generator();
         let mut h_generators = Vec::with_capacity(num_attributes);
+        let mut ctr = G::Scalar::ONE;
         for _ in 0..num_attributes {
-            h_generators.push(g_generator * RistrettoScalar::random(rng));
+            h_generators.push(g_generator * ctr);
+            ctr += G::Scalar::ONE;
         }
         Self {
             h_generators,
             g_generator,
-            public_key: RistrettoPoint::generator(), // todo remove or figure out how to make optional, this is purely for private verifiaction
-        }
-    }
-}
-
-impl BbsSignatureParams<G1Projective> {
-    /// Generates parameters for the BBS scheme based on the `num_attributes` parameter:
-    ///
-    /// # Arguments
-    /// - `num_attributes`: the number of attributes to be signed
-    /// - `rng`: a random number generator
-    ///
-    /// # Returns
-    /// - `BbsSignatureParams`: the system parameters
-    ///
-    /// # Example
-    /// ```rust
-    /// use bbs_mac_vs_sig::BbsSignatureParams;
-    /// use bls12_381::G1Projective;
-    /// let mut rng = rand::thread_rng();
-    /// let num_attributes = 5;
-    /// let params = BbsSignatureParams::<G1Projective>::new(num_attributes, &mut rng);
-    /// ```
-    pub fn new(num_attributes: usize, rng: &mut impl RngCore) -> Self {
-        let g_generator = G1Projective::generator();
-        let mut h_generators = Vec::with_capacity(num_attributes);
-        for _ in 0..num_attributes {
-            h_generators.push(G1Projective::random(&mut *rng));
-        }
-        Self {
-            h_generators,
-            g_generator,
-            public_key: g_generator, // todo figure out how to make this optional or include public key
         }
     }
 }
@@ -162,6 +130,64 @@ pub struct BbsSignature<G: Group> {
     a: G,
     e: G::Scalar,
 }
+
+// impl<BbsProof<G1Projective>> BbsProof<G1Projective> {
+//     fn prove_partial() -> Option<BbsProof<G1Projective>>{
+//
+//     }
+//
+//     fn verify_partial(&self, public_key: &G2Projective, messages: &[G::Scalar], signature: &BbsSignature<G1Projective>, bbs_params: &BbsSignatureParams<G1Projective>) -> bool {
+//         // verify signature with the public key pk=sk*generator
+//         // compute e(m, pk)=e(signature, g)
+//
+//
+//         // start by recomputing the sum of messages...
+//         let b: G1Projective = bbs_params.g_generator
+//             + messages
+//                 .iter()
+//                 .zip(bbs_params.h_generators.iter())
+//                 .map(|(m, h)| (*h) * (*m))
+//                 .sum::<G1Projective>();
+//
+//             // compute pairing with public key
+//
+//
+// // Get the generator of G2
+// let g2_gen = G2Projective::generator();
+//
+// // Negate the G2 generator for the efficient check
+// // We want to check e(sig, -g2_gen) * e(H(m), pk) = 1
+// let neg_g2_gen = -g2_gen;
+//
+// // Pairings are computed on Affine points, not Projective.
+// // Convert our G1Projective and G2Projective points.
+// let signature_affine = G1Affine::from(signature);
+// let msg_hash_affine = G1Affine::from(msg_hash_point);
+// let public_key_affine = G2Affine::from(public_key);
+// let neg_g2_gen_affine = G2Affine::from(neg_g2_gen);
+//
+// // Prepare the pairs for the multi-miller loop
+// // This is an array of tuples: (&G1Affine, &G2Affine)
+// let pairs = [
+//     (&signature_affine, &neg_g2_gen_affine),
+//     (&msg_hash_affine, &public_key_affine)
+// ];
+//
+// // 4. Compute the multi-miller loop
+// // This computes the product of pairings: e(sig, -g2_gen) * e(H(m), pk)
+// let miller_output = Bls12::multi_miller_loop(&pairs);
+//
+// // 5. Perform the final exponentiation
+// // This is the "e(...)" part. It maps the miller loop output to Gt.
+// let pairing_result = miller_output.final_exponentiation();
+//
+// // 6. Check if the result is the identity element of Gt
+// // If it is, the signature is valid!
+// if pairing_result == Gt::identity() {
+//     return true;
+// }
+// false    }
+// }
 
 impl<G: Group> BbsSignature<G> {
     /// Implements the core BBS signing computation:
