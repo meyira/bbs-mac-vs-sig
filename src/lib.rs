@@ -20,7 +20,7 @@ pub struct BbsParams<G: Group> {
 }
 
 impl BbsParams<G1Projective> {
-    /// Generates parameters for the BBS scheme based on the `num_attributes` parameter:
+    /// Generates parameters for the BBS scheme based on the desired number of attributes to sign.
     ///
     /// # Arguments
     /// - `num_attributes`: the number of attributes to be signed
