@@ -9,7 +9,7 @@ use ff::Field; // For .invert() and .is_zero()
 use group::Group; // For G1Projective ops (+, *, .generator())
 use rand::RngCore;
 
-/// System parameters that define the cryptographic setup for the BBS scheme
+/// System parameters that define the cryptographic setup for the BBS scheme.
 ///
 /// The generators are going to be used throughout the protocol. The number of
 /// generators depends on the number of messages the BBS scheme is supposed to sign.
