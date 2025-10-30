@@ -73,6 +73,17 @@ pub struct BbsProof {
 ////////// ----------------------------------------------------- ////////////////////
 ////////// ----------------------------------------------------- ////////////////////
 
+#[derive(Debug)]
+pub enum BbsSignatureError {
+    /// thrown when the number of messages does not match the number of generators
+    InputLengthMismatch,
+    /// thrown when the inverse of (x + e) cannot be computed (e.g. when x + e = 0)
+    VerificationInverseFailed,
+    /// thrown when the verification fails (e.g. when the given
+    /// `A` != `(x + e)^-1 * (G + m1*H1 + ... + ml*Hl)`)
+    VerificationFailed,
+}
+
 /// System parameters that define the cryptographic setup for the BBS scheme
 ///
 /// The generators are going to be used throughout the protocol. The number of
@@ -99,6 +110,7 @@ impl BbsSignatureParams<RistrettoPoint> {
     /// use bbs_mac_vs_sig::BbsSignatureParams;
     /// use curve25519_dalek::RistrettoPoint;
     /// let mut rng = rand::thread_rng();
+    ///
     /// let num_attributes = 5;
     /// let params = BbsSignatureParams::<RistrettoPoint>::new(num_attributes, &mut rng);
     /// ```
@@ -116,26 +128,6 @@ impl BbsSignatureParams<RistrettoPoint> {
     }
 }
 
-/// A BBS MAC (Message Authentication Code) with the following components:
-/// - `a`: the MAC value `A = (x + e)^-1 * (G + m1*H1 + ... + ml*Hl)` for `l` messages
-/// - `e`: the random scalar used for the MAC
-#[derive(Debug)]
-pub struct BbsSignature {
-    a: G1Projective,
-    e: Scalar,
-}
-
-#[derive(Debug)]
-pub enum BbsSignatureError {
-    /// thrown when the number of messages does not match the number of generators
-    InputLengthMismatch,
-    /// thrown when the inverse of (x + e) cannot be computed (e.g. when x + e = 0)
-    VerificationInverseFailed,
-    /// thrown when the verification fails (e.g. when the given
-    /// `A` != `(x + e)^-1 * (G + m1*H1 + ... + ml*Hl)`)
-    VerificationFailed,
-}
-
 impl BbsSignatureParams<G1Projective> {
     /// Generates parameters for the BBS scheme based on the `num_attributes` parameter:
     ///
@@ -149,9 +141,10 @@ impl BbsSignatureParams<G1Projective> {
     /// # Example
     /// ```rust
     /// use bbs_mac_vs_sig::BbsSignatureParams;
+    /// use bls12_381::G1Projective;
     /// let mut rng = rand::thread_rng();
     /// let num_attributes = 5;
-    /// let params = BbsSignatureParams::new(num_attributes, &mut rng);
+    /// let params = BbsSignatureParams::<G1Projective>::new(num_attributes, &mut rng);
     /// ```
     pub fn new(num_attributes: usize, rng: &mut impl RngCore) -> Self {
         let g_generator = G1Projective::generator();
@@ -167,7 +160,16 @@ impl BbsSignatureParams<G1Projective> {
     }
 }
 
-impl BbsSignature {
+/// A BBS MAC (Message Authentication Code) with the following components:
+/// - `a`: the MAC value `A = (x + e)^-1 * (G + m1*H1 + ... + ml*Hl)` for `l` messages
+/// - `e`: the random scalar used for the MAC
+#[derive(Debug)]
+pub struct BbsSignature<G: Group> {
+    a: G,
+    e: Scalar,
+}
+
+impl BbsSignature<G1Projective> {
     /// Implements the core BBS signing computation:
     /// A = (x + e)^-1 * (G + m1*H1 + ... + ml*Hl)
     ///
@@ -197,15 +199,14 @@ impl BbsSignature {
     ///     messages.push(Scalar::random(&mut rng));
     /// }
     ///
-    /// let mac = BbsSignature::sign(&x, &messages, &params, &mut rng).unwrap();
-    /// BbsSignature::verify(&x, &messages, &mac, &params).unwrap();
+    /// let mac = BbsSignature::<G1Projective>::sign(&x, &messages, &params, &mut rng).unwrap();
     /// ```
     pub fn sign(
         x: &Scalar,
         messages: &[Scalar],
         bbs_params: &BbsSignatureParams<G1Projective>,
         rng: &mut impl RngCore,
-    ) -> Result<BbsSignature, BbsSignatureError> {
+    ) -> Result<BbsSignature<G1Projective>, BbsSignatureError> {
         if messages.len() != bbs_params.h_generators.len() {
             return Err(BbsSignatureError::InputLengthMismatch);
         }
@@ -233,19 +234,21 @@ impl BbsSignature {
         // Compute the multi-scalar multiplication with the generators and messages:
         // `B = G + m1*H1 + ... + ml*Hl`
         // TODO do we have some form of multi-exp here?
-        let b: G1Projective = bbs_params.g_generator
+        let b: G = bbs_params.g_generator
             + messages
                 .iter()
                 .zip(bbs_params.h_generators.iter())
                 .map(|(m, h)| (*h) * (*m))
-                .sum::<G1Projective>();
+                .sum::<G>();
 
         // Compute the final signature component `A = d_inv * B`
         let a: G1Projective = b * d_inv;
 
         Ok(Self { a, e })
     }
+}
 
+impl BbsSignature<G1Projective> {
     /// Verifies a BBS MAC by recomputing B and checking that `A == (x + e)^{-1} * B`.
     ///
     /// # Parameters
@@ -276,13 +279,13 @@ impl BbsSignature {
     ///     messages.push(Scalar::random(&mut rng));
     /// }
     ///
-    /// let mac = BbsSignature::sign(&x, &messages, &params, &mut rng).unwrap();
-    /// BbsSignature::verify(&x, &messages, &mac, &params).unwrap();
+    /// let mac = BbsSignature::<G1Projective>::sign(&x, &messages, &params, &mut rng).unwrap();
+    /// BbsSignature::<G1Projective>::verify(&x, &messages, &mac, &params).unwrap();
     /// ```
     pub fn verify(
         x: &Scalar,
         messages: &[Scalar],
-        mac: &BbsSignature,
+        mac: &BbsSignature<G1Projective>,
         bbs_params: &BbsSignatureParams<G1Projective>,
     ) -> Result<(), BbsSignatureError> {
         if messages.len() != bbs_params.h_generators.len() {
@@ -312,7 +315,7 @@ impl BbsSignature {
 impl BbsProof {
     pub fn show_partial(
         pk: G1Projective,
-        signature: BbsSignature,
+        signature: BbsSignature<G1Projective>,
         messages: &[Scalar],
         bbs_params: &BbsSignatureParams<G1Projective>,
         disclosed_indices: &[usize],
@@ -454,8 +457,8 @@ mod tests {
             messages.push(Scalar::random(&mut rng));
         }
 
-        let mac = BbsSignature::sign(&x, &messages, &params, &mut rng).unwrap();
-        BbsSignature::verify(&x, &messages, &mac, &params).unwrap();
+        let mac = BbsSignature::<G1Projective>::sign(&x, &messages, &params, &mut rng).unwrap();
+        BbsSignature::<G1Projective>::verify(&x, &messages, &mac, &params).unwrap();
     }
 
     /// Fails verification when messages are tampered after signing.
@@ -471,13 +474,13 @@ mod tests {
             messages.push(Scalar::random(&mut rng));
         }
 
-        let mac = BbsSignature::sign(&x, &messages, &params, &mut rng).unwrap();
+        let mac = BbsSignature::<G1Projective>::sign(&x, &messages, &params, &mut rng).unwrap();
 
         // Tamper one message
         let mut tampered = messages.clone();
         tampered[0] += Scalar::one();
 
-        let res = BbsSignature::verify(&x, &tampered, &mac, &params);
+        let res = BbsSignature::<G1Projective>::verify(&x, &tampered, &mac, &params);
         assert!(matches!(res, Err(BbsSignatureError::VerificationFailed)));
     }
 
