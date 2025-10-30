@@ -60,8 +60,6 @@ pub struct BbsMac {
 pub enum BbsMacError {
     /// thrown when the number of attributes does not match the number of generators
     InputLengthMismatch,
-    /// thrown when the inverse of (x + e) cannot be computed (e.g. when x + e = 0)
-    VerificationInverseFailed,
     /// thrown when the verification fails (e.g. when the given
     /// `A` != `(x + e)^-1 * (G + m1*H1 + ... + ml*Hl)`)
     VerificationFailed,
@@ -114,9 +112,9 @@ impl BbsMac {
         let mut e: Scalar = Scalar::random(&mut *rng);
 
         // Compute the scalar inverse: (x + e)^-1.
-        let mut d: Scalar = *x + e; // d = x + e
         // We loop, re-sampling 'e' until (x + e) is non-zero and we get an inverse.
-        let d_inv: Scalar = loop {
+        let d_inv = loop {
+            let d: Scalar = *x + e; // d = x + e
             // Attempt to compute the inverse.
             // ff::Field::invert returns subtle::CtOption<Self>.
             let inv = d.invert();
@@ -126,7 +124,6 @@ impl BbsMac {
             } else {
                 // (x + e) was zero. Sample a new 'e' and the loop will retry.
                 e = Scalar::random(&mut *rng);
-                d = *x + e;
             }
         };
 
@@ -156,7 +153,6 @@ impl BbsMac {
     ///
     /// # Returns
     /// - `Ok(())`: the MAC is valid
-    /// - `Err(BbsMacError::VerificationInverseFailed)`: could not invert (x + e)
     /// - `Err(BbsMacError::InputLengthMismatch)`: number of attributes does not match number of generators
     /// - `Err(BbsMacError::VerificationFailed)`: computed value does not match the provided MAC
     ///
@@ -191,7 +187,7 @@ impl BbsMac {
 
         let inv = (x + mac.e).invert();
         if bool::from(inv.is_none()) {
-            return Err(BbsMacError::VerificationInverseFailed);
+            return Err(BbsMacError::VerificationFailed);
         }
 
         let b: G1Projective = bbs_params.g_generator
