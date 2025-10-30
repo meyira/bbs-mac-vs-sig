@@ -39,7 +39,9 @@ impl BbsParams<G1Projective> {
     /// ```
     pub fn new(num_attributes: usize, rng: &mut impl RngCore) -> Self {
         let g_generator = G1Projective::generator();
-        let h_generators = std::iter::repeat_with(|| G1Projective::random(&mut *rng)).take(num_attributes).collect();
+        let h_generators = std::iter::repeat_with(|| G1Projective::random(&mut *rng))
+            .take(num_attributes)
+            .collect();
         Self {
             h_generators,
             g_generator,
@@ -117,13 +119,12 @@ impl BbsMac {
             let d: Scalar = *x + e; // d = x + e
             // Attempt to compute the inverse.
             // ff::Field::invert returns subtle::CtOption<Self>.
-            let inv = d.invert();
-            if bool::from(inv.is_some()) {
-                // Success! The inverse exists.
-                break inv.unwrap();
-            } else {
-                // (x + e) was zero. Sample a new 'e' and the loop will retry.
-                e = Scalar::random(&mut *rng);
+            match d.invert() {
+                Some(inv) => break inv,
+                None => {
+                    // (x + e) was zero. Sample a new 'e' and the loop will retry.
+                    e = Scalar::random(&mut *rng);
+                }
             }
         };
 
@@ -185,10 +186,9 @@ impl BbsMac {
             return Err(BbsMacError::InputLengthMismatch);
         }
 
-        let inv = (x + mac.e).invert();
-        if bool::from(inv.is_none()) {
+        let Some(inv) = (x + mac.e).invert() else {
             return Err(BbsMacError::VerificationFailed);
-        }
+        };
 
         let b: G1Projective = bbs_params.g_generator
             + attributes
