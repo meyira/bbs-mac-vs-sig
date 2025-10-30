@@ -105,9 +105,9 @@ impl<G: Group> BbsSignatureParams<G> {
     /// let mut rng = rand::thread_rng();
     ///
     /// let num_attributes = 5;
-    /// let params = BbsSignatureParams::<RistrettoPoint>::new(num_attributes, &mut rng);
+    /// let params = BbsSignatureParams::<RistrettoPoint>::new(num_attributes);
     /// ```
-    pub fn new(num_attributes: usize, rng: &mut (impl RngCore + rand::CryptoRng)) -> Self {
+    pub fn new(num_attributes: usize) -> Self {
         let g_generator = G::generator();
         let mut h_generators = Vec::with_capacity(num_attributes);
         let mut ctr = G::Scalar::ONE;
@@ -120,76 +120,6 @@ impl<G: Group> BbsSignatureParams<G> {
             g_generator,
         }
     }
-}
-
-/// A BBS MAC (Message Authentication Code) with the following components:
-/// - `a`: the MAC value `A = (x + e)^-1 * (G + m1*H1 + ... + ml*Hl)` for `l` messages
-/// - `e`: the random scalar used for the MAC
-#[derive(Debug)]
-pub struct BbsSignature<G: Group> {
-    a: G,
-    e: G::Scalar,
-}
-
-// impl<BbsProof<G1Projective>> BbsProof<G1Projective> {
-//     fn prove_partial() -> Option<BbsProof<G1Projective>>{
-//
-//     }
-//
-//     fn verify_partial(&self, public_key: &G2Projective, messages: &[G::Scalar], signature: &BbsSignature<G1Projective>, bbs_params: &BbsSignatureParams<G1Projective>) -> bool {
-//         // verify signature with the public key pk=sk*generator
-//         // compute e(m, pk)=e(signature, g)
-//
-//
-//         // start by recomputing the sum of messages...
-//         let b: G1Projective = bbs_params.g_generator
-//             + messages
-//                 .iter()
-//                 .zip(bbs_params.h_generators.iter())
-//                 .map(|(m, h)| (*h) * (*m))
-//                 .sum::<G1Projective>();
-//
-//             // compute pairing with public key
-//
-//
-// // Get the generator of G2
-// let g2_gen = G2Projective::generator();
-//
-// // Negate the G2 generator for the efficient check
-// // We want to check e(sig, -g2_gen) * e(H(m), pk) = 1
-// let neg_g2_gen = -g2_gen;
-//
-// // Pairings are computed on Affine points, not Projective.
-// // Convert our G1Projective and G2Projective points.
-// let signature_affine = G1Affine::from(signature);
-// let msg_hash_affine = G1Affine::from(msg_hash_point);
-// let public_key_affine = G2Affine::from(public_key);
-// let neg_g2_gen_affine = G2Affine::from(neg_g2_gen);
-//
-// // Prepare the pairs for the multi-miller loop
-// // This is an array of tuples: (&G1Affine, &G2Affine)
-// let pairs = [
-//     (&signature_affine, &neg_g2_gen_affine),
-//     (&msg_hash_affine, &public_key_affine)
-// ];
-//
-// // 4. Compute the multi-miller loop
-// // This computes the product of pairings: e(sig, -g2_gen) * e(H(m), pk)
-// let miller_output = Bls12::multi_miller_loop(&pairs);
-//
-// // 5. Perform the final exponentiation
-// // This is the "e(...)" part. It maps the miller loop output to Gt.
-// let pairing_result = miller_output.final_exponentiation();
-//
-// // 6. Check if the result is the identity element of Gt
-// // If it is, the signature is valid!
-// if pairing_result == Gt::identity() {
-//     return true;
-// }
-// false    }
-// }
-
-impl<G: Group> BbsSignature<G> {
     /// Implements the core BBS signing computation:
     /// A = (x + e)^-1 * (G + m1*H1 + ... + ml*Hl)
     ///
@@ -213,22 +143,22 @@ impl<G: Group> BbsSignature<G> {
     ///
     /// let mut rng = rand::thread_rng();
     /// let num_messages = 5;
-    /// let params = BbsSignatureParams::<G1Projective>::new(num_messages, &mut rng);
+    /// let params = BbsSignatureParams::<G1Projective>::new(num_messages);
     /// let x = Bls12_381Scalar::random(&mut rng);
     /// let mut messages = Vec::with_capacity(num_messages);
     /// for _ in 0..num_messages {
     ///     messages.push(Bls12_381Scalar::random(&mut rng));
     /// }
     ///
-    /// let mac = BbsSignature::<G1Projective>::sign(&x, &messages, &params, &mut rng).unwrap();
+    /// let mac = params.sign(&x, &messages, &mut rng).unwrap();
     /// ```
     pub fn sign(
+        &self,
         x: &G::Scalar,
         messages: &[G::Scalar],
-        bbs_params: &BbsSignatureParams<G>,
         rng: &mut impl RngCore,
     ) -> Result<BbsSignature<G>, BbsSignatureError> {
-        if messages.len() != bbs_params.h_generators.len() {
+        if messages.len() != self.h_generators.len() {
             return Err(BbsSignatureError::InputLengthMismatch);
         }
 
@@ -255,17 +185,17 @@ impl<G: Group> BbsSignature<G> {
         // Compute the multi-scalar multiplication with the generators and messages:
         // `B = G + m1*H1 + ... + ml*Hl`
         // TODO do we have some form of multi-exp here?
-        let b: G = bbs_params.g_generator
+        let b: G = self.g_generator
             + messages
                 .iter()
-                .zip(bbs_params.h_generators.iter())
+                .zip(self.h_generators.iter())
                 .map(|(m, h)| (*h) * (*m))
                 .sum::<G>();
 
         // Compute the final signature component `A = d_inv * B`
         let a: G = b * d_inv;
 
-        Ok(Self { a, e })
+        Ok(BbsSignature { a, e })
     }
     /// Verifies a BBS MAC by recomputing B and checking that `A == (x + e)^{-1} * B`.
     ///
@@ -273,7 +203,6 @@ impl<G: Group> BbsSignature<G> {
     /// - x: the secret key scalar
     /// - attributes: the attributes to be verified
     /// - mac: the MAC to be verified
-    /// - bbs_params: the system parameters
     ///
     /// # Returns
     /// - `Ok(())`: the MAC is valid
@@ -289,7 +218,7 @@ impl<G: Group> BbsSignature<G> {
     ///
     /// let mut rng = rand::thread_rng();
     /// let num_attributes = 5;
-    /// let params = BbsSignatureParams::<G1Projective>::new(num_attributes, &mut rng);
+    /// let params = BbsSignatureParams::<G1Projective>::new(num_attributes);
     /// let x = Scalar::random(&mut rng);
     ///
     /// let mut attributes = Vec::with_capacity(num_attributes);
@@ -297,26 +226,26 @@ impl<G: Group> BbsSignature<G> {
     ///     attributes.push(Scalar::random(&mut rng));
     /// }
     ///
-    /// let mac = BbsSignature::<G1Projective>::sign(&x, &attributes, &params, &mut rng).unwrap();
-    /// BbsSignature::<G1Projective>::verify(&x, &attributes, &mac, &params).unwrap();
+    /// let mac = params.sign(&x, &attributes, &mut rng).unwrap();
+    /// params.verify(&x, &attributes, &mac).unwrap();
     /// ```
     pub fn verify(
+        &self,
         x: &G::Scalar,
         attributes: &[G::Scalar],
         mac: &BbsSignature<G>,
-        bbs_params: &BbsSignatureParams<G>,
     ) -> Result<(), BbsSignatureError> {
-        if attributes.len() != bbs_params.h_generators.len() {
+        if attributes.len() != self.h_generators.len() {
             return Err(BbsSignatureError::InputLengthMismatch);
         }
         let d = *x + mac.e;
         let d_inv: G::Scalar =
             Option::<G::Scalar>::from(d.invert()).ok_or(BbsSignatureError::VerificationFailed)?;
 
-        let b: G = bbs_params.g_generator
+        let b: G = self.g_generator
             + attributes
                 .iter()
-                .zip(bbs_params.h_generators.iter())
+                .zip(self.h_generators.iter())
                 .map(|(m, h)| (*h) * (*m))
                 .sum::<G>();
 
@@ -327,6 +256,16 @@ impl<G: Group> BbsSignature<G> {
             Err(BbsSignatureError::VerificationFailed)
         }
     }
+}
+
+/// A BBS Signature with the following components:
+/// - `a`: the signature value `A = (x + e)^-1 * (G + m1*H1 + ... + ml*Hl)` for `l` messages
+/// - `e`: the random scalar used for the signature
+/// the signature is only privately verifiable when not using pairings (i.e. needs a private key for verification)
+#[derive(Debug)]
+pub struct BbsSignature<G: Group> {
+    a: G,
+    e: G::Scalar,
 }
 
 impl BbsProof {
@@ -465,7 +404,7 @@ mod tests {
     fn sign_and_verify_succeeds_ristretto() {
         let mut rng = rand::thread_rng();
         let num_messages = 5;
-        let params = BbsSignatureParams::<RistrettoPoint>::new(num_messages, &mut rng);
+        let params = BbsSignatureParams::<RistrettoPoint>::new(num_messages);
         let x = RistrettoScalar::random(&mut rng);
 
         let mut messages = Vec::with_capacity(num_messages);
@@ -473,8 +412,8 @@ mod tests {
             messages.push(RistrettoScalar::random(&mut rng));
         }
 
-        let mac = BbsSignature::<RistrettoPoint>::sign(&x, &messages, &params, &mut rng).unwrap();
-        BbsSignature::<RistrettoPoint>::verify(&x, &messages, &mac, &params).unwrap();
+        let mac: BbsSignature<RistrettoPoint> = params.sign(&x, &messages, &mut rng).unwrap();
+        params.verify(&x, &messages, &mac).unwrap();
     }
 
     /// Fails verification when messages are tampered after signing.
@@ -482,7 +421,7 @@ mod tests {
     fn tampered_message_fails_ristretto() {
         let mut rng = rand::thread_rng();
         let num_messages = 3;
-        let params = BbsSignatureParams::<RistrettoPoint>::new(num_messages, &mut rng);
+        let params = BbsSignatureParams::<RistrettoPoint>::new(num_messages);
         let x = RistrettoScalar::random(&mut rng);
 
         let mut messages = Vec::with_capacity(num_messages);
@@ -490,13 +429,13 @@ mod tests {
             messages.push(RistrettoScalar::random(&mut rng));
         }
 
-        let mac = BbsSignature::<RistrettoPoint>::sign(&x, &messages, &params, &mut rng).unwrap();
+        let mac = params.sign(&x, &messages, &mut rng).unwrap();
 
         // Tamper one message
         let mut tampered = messages.clone();
         tampered[0] += RistrettoScalar::ONE;
 
-        let res = BbsSignature::<RistrettoPoint>::verify(&x, &tampered, &mac, &params);
+        let res = params.verify(&x, &tampered, &mac);
         assert!(matches!(res, Err(BbsSignatureError::VerificationFailed)));
     }
 
@@ -505,7 +444,7 @@ mod tests {
     fn length_mismatch_errors_ristretto() {
         let mut rng = rand::thread_rng();
         let num_messages = 4;
-        let params = BbsSignatureParams::<RistrettoPoint>::new(num_messages, &mut rng);
+        let params = BbsSignatureParams::<RistrettoPoint>::new(num_messages);
         let x = RistrettoScalar::random(&mut rng);
 
         // Use different number of messages than params expect
@@ -515,7 +454,7 @@ mod tests {
             messages.push(RistrettoScalar::random(&mut rng));
         }
 
-        let res = BbsSignature::<RistrettoPoint>::sign(&x, &messages, &params, &mut rng);
+        let res = params.sign(&x, &messages, &mut rng);
         assert!(matches!(res, Err(BbsSignatureError::InputLengthMismatch)));
     }
 
@@ -525,7 +464,7 @@ mod tests {
     fn sign_and_verify_succeeds_bls12_381() {
         let mut rng = rand::thread_rng();
         let num_messages = 5;
-        let params = BbsSignatureParams::<G1Projective>::new(num_messages, &mut rng);
+        let params = BbsSignatureParams::<G1Projective>::new(num_messages);
         let x = Bls12_381Scalar::random(&mut rng);
 
         let mut messages = Vec::with_capacity(num_messages);
@@ -533,8 +472,8 @@ mod tests {
             messages.push(Bls12_381Scalar::random(&mut rng));
         }
 
-        let mac = BbsSignature::<G1Projective>::sign(&x, &messages, &params, &mut rng).unwrap();
-        BbsSignature::<G1Projective>::verify(&x, &messages, &mac, &params).unwrap();
+        let mac = params.sign(&x, &messages, &mut rng).unwrap();
+        params.verify(&x, &messages, &mac).unwrap();
     }
 
     /// Fails verification when messages are tampered after signing.
@@ -542,7 +481,7 @@ mod tests {
     fn tampered_message_fails_bls12_381() {
         let mut rng = rand::thread_rng();
         let num_messages = 3;
-        let params = BbsSignatureParams::<G1Projective>::new(num_messages, &mut rng);
+        let params = BbsSignatureParams::<G1Projective>::new(num_messages);
         let x = Bls12_381Scalar::random(&mut rng);
 
         let mut messages = Vec::with_capacity(num_messages);
@@ -550,13 +489,13 @@ mod tests {
             messages.push(Bls12_381Scalar::random(&mut rng));
         }
 
-        let mac = BbsSignature::<G1Projective>::sign(&x, &messages, &params, &mut rng).unwrap();
+        let mac = params.sign(&x, &messages, &mut rng).unwrap();
 
         // Tamper one message
         let mut tampered = messages.clone();
         tampered[0] += Bls12_381Scalar::one();
 
-        let res = BbsSignature::<G1Projective>::verify(&x, &tampered, &mac, &params);
+        let res = params.verify(&x, &tampered, &mac);
         assert!(matches!(res, Err(BbsSignatureError::VerificationFailed)));
     }
 
@@ -565,7 +504,7 @@ mod tests {
     fn length_mismatch_errors_bls12_381() {
         let mut rng = rand::thread_rng();
         let num_messages = 4;
-        let params = BbsSignatureParams::<G1Projective>::new(num_messages, &mut rng);
+        let params = BbsSignatureParams::<G1Projective>::new(num_messages);
         let x = Bls12_381Scalar::random(&mut rng);
 
         // Use different number of messages than params expect
@@ -575,7 +514,7 @@ mod tests {
             messages.push(Bls12_381Scalar::random(&mut rng));
         }
 
-        let res = BbsSignature::sign(&x, &messages, &params, &mut rng);
+        let res = params.sign(&x, &messages, &mut rng);
         assert!(matches!(res, Err(BbsSignatureError::InputLengthMismatch)));
     }
 }
