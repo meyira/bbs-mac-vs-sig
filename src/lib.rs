@@ -231,7 +231,7 @@ pub struct BbsPublicKey {
 }
 
 impl BbsPublicKey {
-    fn new(private_key: Bls12_381Scalar) -> Self {
+    pub fn new(private_key: Bls12_381Scalar) -> Self {
         Self {
             public_key: private_key * G2Projective::generator(),
         }
@@ -295,7 +295,7 @@ impl BbsProof {
     /// params.verify(&x, &attributes, &mac).unwrap();
     /// ```
     pub fn verify_with_pk(
-        pk: BbsPublicKey,
+        pk: &BbsPublicKey,
         attributes: &[Bls12_381Scalar],
         signature: &BbsSignature<G1Projective>,
         params: &BbsSignatureParams<G1Projective>,
