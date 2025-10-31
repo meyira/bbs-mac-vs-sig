@@ -300,7 +300,7 @@ impl BbsProof {
         signature: &BbsSignature<G1Projective>,
         params: &BbsSignatureParams<G1Projective>,
     ) -> bool {
-        // note:pairings are always between two groups (g2, g1). The signature lives in g1, which
+        // note: pairings are always between two groups (g2, g1). The signature lives in g1, which
         // gives shorter signatures, and the public key lives in g2. We could also change it
         // if we want smaller public keys
 
@@ -312,8 +312,9 @@ impl BbsProof {
                 .map(|(m, h)| (*h) * (*m))
                 .sum::<G1Projective>();
 
-        // TODO compute pairing between message and public key
+        // compute pairing between attribute and public key
         let e1 = pairing(&attr.to_affine(), &pk.public_key.to_affine());
+        // compute pairing between signature and generator
         let e2 = pairing(
             &signature.a.to_affine(),
             &G2Projective::generator().to_affine(),

@@ -4,6 +4,18 @@ use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use curve25519_dalek::{RistrettoPoint, Scalar as RistrettoScalar};
 use ff::Field;
 
+/// Benchmarks verification routines for a single attribute count.
+///
+/// For the given `num_attributes`, this:
+/// - Builds parameters for both curves (Ristretto and BLS12-381 G1).
+/// - Samples random attributes and a secret key per curve.
+/// - Signs, then measures three variants:
+///   - Ristretto MAC verify (no pairing)
+///   - BLS12-381 MAC verify (no pairing)
+///   - Pairing-based verification with a public key (BLS12-381)
+///
+/// Each Criterion benchmark name is suffixed with `(n=...)` so results for
+/// different sizes are distinguishable.
 fn bench_for_size(c: &mut Criterion, num_attributes: usize) {
     // Setup (not measured)
     let mut rng = rand::thread_rng();
@@ -28,48 +40,63 @@ fn bench_for_size(c: &mut Criterion, num_attributes: usize) {
         .expect("signing should succeed");
     let pk_bls = BbsPublicKey::new(x_bls);
 
-    let name_ristretto = format!("verify_mac with ristretto (n={})", num_attributes);
-    c.bench_function(name_ristretto.as_str(), |b| {
-        b.iter(|| {
-            let _ok = params_ristretto
-                .verify(
-                    black_box(&x_ristretto),
-                    black_box(&ristretto_attributes),
-                    black_box(&mac_ristretto),
-                )
-                .is_ok();
-            _ok
-        })
-    });
+    let group_name = format!("verify n={}", num_attributes);
+    let mut group = c.benchmark_group(group_name);
 
-    let name_bls = format!("verify_mac with bls12 (no pairing) (n={})", num_attributes);
-    c.bench_function(name_bls.as_str(), |b| {
-        b.iter(|| {
-            let _ok = params_bls
-                .verify(
-                    black_box(&x_bls),
+    #[cfg(feature = "ristretto")]
+    {
+        group.bench_function("ristretto_mac", |b| {
+            b.iter(|| {
+                let _ok = params_ristretto
+                    .verify(
+                        black_box(&x_ristretto),
+                        black_box(&ristretto_attributes),
+                        black_box(&mac_ristretto),
+                    )
+                    .is_ok();
+                _ok
+            })
+        });
+    }
+
+    #[cfg(feature = "bls")]
+    {
+        group.bench_function("bls_mac", |b| {
+            b.iter(|| {
+                let _ok = params_bls
+                    .verify(
+                        black_box(&x_bls),
+                        black_box(&attributes_bls),
+                        black_box(&mac_bls),
+                    )
+                    .is_ok();
+                _ok
+            })
+        });
+    }
+
+    #[cfg(feature = "pairing")]
+    {
+        group.bench_function("bls_pairing", |b| {
+            b.iter(|| {
+                let _ok = BbsProof::verify_with_pk(
+                    black_box(&pk_bls),
                     black_box(&attributes_bls),
                     black_box(&mac_bls),
-                )
-                .is_ok();
-            _ok
-        })
-    });
+                    black_box(&params_bls),
+                );
+                _ok
+            })
+        });
+    }
 
-    let name_pairing = format!("verify_with_pk (pairing) (n={})", num_attributes);
-    c.bench_function(name_pairing.as_str(), |b| {
-        b.iter(|| {
-            let _ok = BbsProof::verify_with_pk(
-                black_box(&pk_bls),
-                black_box(&attributes_bls),
-                black_box(&mac_bls),
-                black_box(&params_bls),
-            );
-            _ok
-        })
-    });
+    group.finish();
 }
 
+/// Runs the verification benchmarks across multiple attribute counts.
+///
+/// Currently benchmarks: 5, 10, 15, 25, and 50 attributes. Modify the list
+/// to add or remove sizes as needed.
 fn bench_all(c: &mut Criterion) {
     for n in [5usize, 10, 15, 25, 50] {
         bench_for_size(c, n);
